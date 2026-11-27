@@ -5,7 +5,8 @@ Entry for [make.fun — Squeeze screenshots into the smallest PNG, 27 November 2
 `main.ts` (Node 22, built-ins only) reads 8 screenshots of 1280×720 RGBA from
 `/input/<id>/image.png` and writes a lossless, smaller PNG for each to
 `/output/<id>/image.png`, in under 60 seconds for the whole set, deterministically
-(two runs are byte-identical).
+(two runs are byte-identical). `optdeflate.ts` is a pure-JavaScript
+optimal-parse DEFLATE encoder (zopfli-style) used for the final compression.
 
 How it squeezes:
 
@@ -21,8 +22,12 @@ How it squeezes:
   block-brute search (one filter per 8-row block, scored by a real
   level-9 deflate). Candidates are screened at zlib level 6, the best
   two per form re-ranked at level 9.
-- **Final compression** — zlib level 9, default and filtered strategies,
-  smallest stream wins.
+- **Final compression** — zlib level 9 as the fallback, then optimal-parse
+  DEFLATE (`optdeflate.ts`: hash-chain LZ77 with near matches, shortest-path
+  DP over length-code boundaries in two cost-model iterations, dynamic
+  Huffman, 256 KiB blocks; the hash-chain budget is 1024 for the small
+  instances and 128 for the large ones, chosen by input size only) on the
+  same filtered data — the smaller stream wins.
 
 ## Run locally on the practice set
 
