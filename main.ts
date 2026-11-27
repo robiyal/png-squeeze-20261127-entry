@@ -1,9 +1,11 @@
 // png-squeeze encoder: lossless PNG re-encoder with colour-type reduction,
-// per-row adaptive filter search and zlib level 9. Written fresh for
+// per-row adaptive filter search, zlib level 9, and optimal-parse DEFLATE
+// (pure JS, zopfli-like) on the screened winner. Written fresh for
 // png-squeeze-01-run-20261127. Node 22, built-ins only, deterministic.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { deflateSync, inflateSync, constants as zconst } from 'node:zlib';
+import { deflateOptimal } from './optdeflate.ts';
 
 const W = 1280;
 const H = 720;
@@ -450,22 +452,26 @@ function pngOfForm(width, height, form, idat) {
   return pngOf(chunks);
 }
 
-// Final compression of the screened winner: zlib level 9, default and
-// filtered strategies, keep the smaller stream. Deterministic: no clock.
+// Final compression of the screened winner: zlib level 9 (default strategy)
+// as the fallback, then optimal-parse DEFLATE on the same filtered data;
+// keep the smaller stream. Deterministic: no clock, no randomness; the
+// chain budget depends only on the input size.
 function encode(rgba, width, height, id) {
   const cands = screen(rgba, width, height);
   let best = null;
   for (const { form, data } of cands) {
-    for (const opts of [
-      { level: 9, memLevel: 9, strategy: zconst.Z_DEFAULT_STRATEGY },
-      { level: 9, memLevel: 9, strategy: zconst.Z_FILTERED },
-    ]) {
-      const s = deflateSync(data, opts);
-      const total = s.length + chunkOverhead(form);
-      if (best === null || total < best.total) best = { form, stream: s, total };
-    }
+    const s = deflateSync(data, { level: 9, memLevel: 9, strategy: zconst.Z_DEFAULT_STRATEGY });
+    const total = s.length + chunkOverhead(form);
+    if (best === null || total < best.total) best = { form, data, stream: s, total };
   }
-  return pngOfForm(width, height, best.form, new Uint8Array(best.stream));
+  // Optimal-parse DEFLATE, 256 KiB blocks. Chain budget by input size: the
+  // small instances are cheap to search deeply; the large ones get a shorter
+  // chain so the whole set stays inside the 60 s budget.
+  const chain = best.data.length <= 1048576 ? 1024 : 128;
+  const opt = deflateOptimal(best.data, 262144, chain);
+  let stream = best.stream;
+  if (opt.length + chunkOverhead(best.form) < best.total) stream = opt;
+  return pngOfForm(width, height, best.form, new Uint8Array(stream));
 }
 
 // ---------- Main ----------
